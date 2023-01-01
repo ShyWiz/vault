@@ -47,7 +47,7 @@ func pathRoles(b *backend) *framework.Path {
 
 			"credential_type": {
 				Type:        framework.TypeString,
-				Description: fmt.Sprintf("Type of credential to retrieve. Must be one of %s, %s, or %s", assumedRoleCred, iamUserCred, federationTokenCred),
+				Description: fmt.Sprintf("Type of credential to retrieve. Must be one of %s, %s, %s, or %s", assumedRoleCred, iamUserCred, federationTokenCred, authorizationTokenCred),
 			},
 
 			"role_arns": {
@@ -494,7 +494,7 @@ func setAwsRole(ctx context.Context, s logical.Storage, roleName string, roleEnt
 }
 
 type awsRoleEntry struct {
-	CredentialTypes          []string          `json:"credential_types"`                      // Entries must all be in the set of ("iam_user", "assumed_role", "federation_token")
+	CredentialTypes          []string          `json:"credential_types"`                      // Entries must all be in the set of ("iam_user", "assumed_role", "federation_token", "authorization_token")
 	PolicyArns               []string          `json:"policy_arns"`                           // ARNs of managed policies to attach to an IAM user
 	RoleArns                 []string          `json:"role_arns"`                             // ARNs of roles to assume for AssumedRole credentials
 	PolicyDocument           string            `json:"policy_document"`                       // JSON-serialized inline policy to attach to IAM users and/or to specify as the Policy parameter in AssumeRole calls
@@ -536,11 +536,19 @@ func (r *awsRoleEntry) validate() error {
 		errors = multierror.Append(errors, fmt.Errorf("did not supply credential_type"))
 	}
 
-	allowedCredentialTypes := []string{iamUserCred, assumedRoleCred, federationTokenCred}
+	allowedCredentialTypes := []string{iamUserCred, assumedRoleCred, federationTokenCred, authorizationTokenCred}
 	for _, credType := range r.CredentialTypes {
 		if !strutil.StrListContains(allowedCredentialTypes, credType) {
 			errors = multierror.Append(errors, fmt.Errorf("unrecognized credential type: %s", credType))
 		}
+	}
+
+	if len(r.PolicyArns) > 0 ||
+		r.PolicyDocument != "" ||
+		len(r.IAMGroups) > 0 ||
+		len(r.IAMTags) > 0 &&
+			!strutil.StrListContains(r.CredentialTypes, authorizationTokenCred) {
+		errors = multierror.Append(errors, fmt.Errorf("cannot supply policy_arns, policy_document, iam_groups, or iam_tags when credential_type is %s", authorizationTokenCred))
 	}
 
 	if r.DefaultSTSTTL != 0 && !strutil.StrListContains(r.CredentialTypes, assumedRoleCred) && !strutil.StrListContains(r.CredentialTypes, federationTokenCred) {
@@ -589,9 +597,10 @@ func compactJSON(input string) (string, error) {
 }
 
 const (
-	assumedRoleCred     = "assumed_role"
-	iamUserCred         = "iam_user"
-	federationTokenCred = "federation_token"
+	assumedRoleCred        = "assumed_role"
+	iamUserCred            = "iam_user"
+	federationTokenCred    = "federation_token"
+	authorizationTokenCred = "authorization_token"
 )
 
 const pathListRolesHelpSyn = `List the existing roles in this backend`

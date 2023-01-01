@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/aws/aws-sdk-go/service/ecr/ecriface"
 	"github.com/aws/aws-sdk-go/service/iam/iamiface"
 	"github.com/aws/aws-sdk-go/service/sts/stsiface"
 	"github.com/hashicorp/vault/sdk/framework"
@@ -74,6 +75,7 @@ type backend struct {
 	// to enable mocking with AWS iface for tests
 	iamClient iamiface.IAMAPI
 	stsClient stsiface.STSAPI
+	ecrClient ecriface.ECRAPI
 }
 
 const backendHelp = `
@@ -99,6 +101,7 @@ func (b *backend) clearClients() {
 	defer b.clientMutex.Unlock()
 	b.iamClient = nil
 	b.stsClient = nil
+	b.ecrClient = nil
 }
 
 // clientIAM returns the configured IAM client. If nil, it constructs a new one
@@ -155,4 +158,31 @@ func (b *backend) clientSTS(ctx context.Context, s logical.Storage) (stsiface.ST
 	b.stsClient = stsClient
 
 	return b.stsClient, nil
+}
+
+func (b *backend) clientECR(ctx context.Context, s logical.Storage) (ecriface.ECRAPI, error) {
+	b.clientMutex.RLock()
+	if b.ecrClient != nil {
+		b.clientMutex.RUnlock()
+		return b.ecrClient, nil
+	}
+
+	// Upgrade the lock for writing
+	b.clientMutex.RUnlock()
+	b.clientMutex.Lock()
+	defer b.clientMutex.Unlock()
+
+	// check client again, in the event that a client was being created while we
+	// waited for Lock()
+	if b.ecrClient != nil {
+		return b.ecrClient, nil
+	}
+
+	ecrClient, err := nonCachedClientECR(ctx, s, b.Logger())
+	if err != nil {
+		return nil, err
+	}
+	b.ecrClient = ecrClient
+
+	return b.ecrClient, nil
 }

@@ -12,6 +12,7 @@ import (
 	"github.com/hashicorp/vault/sdk/logical"
 
 	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/service/ecr"
 	"github.com/aws/aws-sdk-go/service/iam"
 	"github.com/aws/aws-sdk-go/service/sts"
 	"github.com/hashicorp/errwrap"
@@ -88,6 +89,28 @@ func genUsername(displayName, policyName, userType, usernameTemplate string) (re
 		}
 	}
 	return
+}
+
+func (b *backend) getAuthorizationToken(ctx context.Context, s logical.Storage) (*logical.Response, error) {
+	ecrClient, err := b.clientECR(ctx, s)
+	if err != nil {
+		return logical.ErrorResponse(err.Error()), nil
+	}
+
+	getTokenInput := &ecr.GetAuthorizationTokenInput{}
+
+	tokenResp, err := ecrClient.GetAuthorizationToken(getTokenInput)
+	if err != nil {
+		return logical.ErrorResponse("Error generating ECR token: %s", err), awsutil.CheckAWSError(err)
+	}
+
+	return &logical.Response{
+		Data: map[string]interface{}{
+			"auth_token":   *tokenResp.AuthorizationData[0].AuthorizationToken,
+			"registry_url": *tokenResp.AuthorizationData[0].ProxyEndpoint,
+			"ttl":          uint64(tokenResp.AuthorizationData[0].ExpiresAt.Sub(time.Now()).Seconds()),
+		},
+	}, nil
 }
 
 func (b *backend) getFederationToken(ctx context.Context, s logical.Storage,

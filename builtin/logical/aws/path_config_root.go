@@ -123,6 +123,7 @@ func (b *backend) pathConfigRootWrite(ctx context.Context, req *logical.Request,
 	// config/root
 	b.iamClient = nil
 	b.stsClient = nil
+	b.ecrClient = nil
 
 	return nil, nil
 }

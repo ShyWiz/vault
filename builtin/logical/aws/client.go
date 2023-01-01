@@ -7,6 +7,7 @@ import (
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/session"
+	"github.com/aws/aws-sdk-go/service/ecr"
 	"github.com/aws/aws-sdk-go/service/iam"
 	"github.com/aws/aws-sdk-go/service/sts"
 	cleanhttp "github.com/hashicorp/go-cleanhttp"
@@ -99,6 +100,22 @@ func nonCachedClientSTS(ctx context.Context, s logical.Storage, logger hclog.Log
 	client := sts.New(sess)
 	if client == nil {
 		return nil, fmt.Errorf("could not obtain sts client")
+	}
+	return client, nil
+}
+
+func nonCachedClientECR(ctx context.Context, s logical.Storage, logger hclog.Logger) (*ecr.ECR, error) {
+	awsConfig, err := getRootConfig(ctx, s, "ecr", logger)
+	if err != nil {
+		return nil, err
+	}
+	sess, err := session.NewSession(awsConfig)
+	if err != nil {
+		return nil, err
+	}
+	client := ecr.New(sess)
+	if client == nil {
+		return nil, fmt.Errorf("could not obtain ecr client")
 	}
 	return client, nil
 }
