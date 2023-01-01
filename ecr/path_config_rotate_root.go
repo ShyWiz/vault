@@ -98,7 +98,6 @@ func (b *backend) pathConfigRotateRootUpdate(ctx context.Context, req *logical.R
 	}
 
 	b.iamClient = nil
-	b.stsClient = nil
 	b.ecrClient = nil
 
 	deleteAccessKeyInput := iam.DeleteAccessKeyInput{
