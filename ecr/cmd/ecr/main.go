@@ -3,9 +3,9 @@ package main
 import (
 	"os"
 
+	ecr "github.com/ShyWiz/vault/ecr"
 	"github.com/hashicorp/go-hclog"
 	"github.com/hashicorp/vault/api"
-	ecr "github.com/hashicorp/vault/ecr"
 	"github.com/hashicorp/vault/sdk/plugin"
 )
 
