@@ -6,10 +6,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
-	"strings"
 
 	"github.com/hashicorp/go-multierror"
-	"github.com/hashicorp/go-secure-stdlib/strutil"
 	"github.com/hashicorp/vault/sdk/framework"
 	"github.com/hashicorp/vault/sdk/logical"
 )
@@ -39,11 +37,6 @@ func pathRoles(b *backend) *framework.Path {
 				DisplayAttrs: &framework.DisplayAttributes{
 					Name: "Policy Name",
 				},
-			},
-
-			"credential_type": {
-				Type:        framework.TypeString,
-				Description: fmt.Sprintf("Type of credential to retrieve. Must be %s", authorizationTokenCred),
 			},
 		},
 
@@ -110,10 +103,6 @@ func (b *backend) pathRolesWrite(ctx context.Context, req *logical.Request, d *f
 	}
 	if roleEntry == nil {
 		roleEntry = &awsRoleEntry{}
-	}
-
-	if credentialTypeRaw, ok := d.GetOk("credential_type"); ok {
-		roleEntry.CredentialTypes = []string{credentialTypeRaw.(string)}
 	}
 
 	err = roleEntry.validate()
@@ -195,13 +184,13 @@ func setAwsRole(ctx context.Context, s logical.Storage, roleName string, roleEnt
 }
 
 type awsRoleEntry struct {
-	CredentialTypes []string `json:"credential_types"` // Entries must all be in the set of ("iam_user", "assumed_role", "federation_token", "authorization_token")
-	Version         int      `json:"version"`          // Version number of the role format
+	RegistryPermission string `json:"registry_permission"` // Must be one of ("read", "write")
+	Version            int    `json:"version"`             // Version number of the role format
 }
 
 func (r *awsRoleEntry) toResponseData() map[string]interface{} {
 	respData := map[string]interface{}{
-		"credential_type": strings.Join(r.CredentialTypes, ","),
+		"registry_permission": r.RegistryPermission,
 	}
 
 	return respData
@@ -210,14 +199,9 @@ func (r *awsRoleEntry) toResponseData() map[string]interface{} {
 func (r *awsRoleEntry) validate() error {
 	var errors *multierror.Error
 
-	if len(r.CredentialTypes) == 0 {
-		errors = multierror.Append(errors, fmt.Errorf("did not supply credential_type"))
-	}
-
-	allowedCredentialTypes := []string{authorizationTokenCred}
-	for _, credType := range r.CredentialTypes {
-		if !strutil.StrListContains(allowedCredentialTypes, credType) {
-			errors = multierror.Append(errors, fmt.Errorf("unrecognized credential type: %s", credType))
+	if r.RegistryPermission != "" {
+		if r.RegistryPermission != "read" || r.RegistryPermission != "write" {
+			errors = multierror.Append(errors, fmt.Errorf("unrecognized registry permission: %s", r.RegistryPermission))
 		}
 	}
 
@@ -229,10 +213,6 @@ func compactJSON(input string) (string, error) {
 	err := json.Compact(&compacted, []byte(input))
 	return compacted.String(), err
 }
-
-const (
-	authorizationTokenCred = "authorization_token"
-)
 
 const pathListRolesHelpSyn = `List the existing roles in this backend`
 

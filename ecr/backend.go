@@ -47,7 +47,9 @@ func Backend() *backend {
 			pathUser(&b),
 		},
 
-		Secrets: []*framework.Secret{},
+		Secrets: []*framework.Secret{
+			secretAccessKeys(&b),
+		},
 
 		Invalidate:        b.invalidate,
 		WALRollback:       b.walRollback,
@@ -127,7 +129,7 @@ func (b *backend) clientIAM(ctx context.Context, s logical.Storage) (iamiface.IA
 	return b.iamClient, nil
 }
 
-func (b *backend) clientECR(ctx context.Context, s logical.Storage) (ecriface.ECRAPI, error) {
+func (b *backend) clientECR(ctx context.Context, s logical.Storage, req *logical.Response) (ecriface.ECRAPI, error) {
 	b.clientMutex.RLock()
 	if b.ecrClient != nil {
 		b.clientMutex.RUnlock()
@@ -145,7 +147,7 @@ func (b *backend) clientECR(ctx context.Context, s logical.Storage) (ecriface.EC
 		return b.ecrClient, nil
 	}
 
-	ecrClient, err := nonCachedClientECR(ctx, s, b.Logger())
+	ecrClient, err := nonCachedClientECR(ctx, s, req, b.Logger())
 	if err != nil {
 		return nil, err
 	}
