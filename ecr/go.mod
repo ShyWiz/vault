@@ -8,7 +8,10 @@ require (
 	github.com/hashicorp/vault/sdk v0.6.2
 )
 
-require github.com/jmespath/go-jmespath v0.4.0 // indirect
+require (
+	github.com/hashicorp/go-secure-stdlib/base62 v0.1.1 // indirect
+	github.com/jmespath/go-jmespath v0.4.0 // indirect
+)
 
 require (
 	github.com/armon/go-metrics v0.3.9 // indirect

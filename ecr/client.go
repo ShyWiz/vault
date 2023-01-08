@@ -79,8 +79,75 @@ func nonCachedClientIAM(ctx context.Context, s logical.Storage, logger hclog.Log
 	return client, nil
 }
 
-func nonCachedClientECR(ctx context.Context, s logical.Storage, logger hclog.Logger) (*ecr.ECR, error) {
-	awsConfig, err := getRootConfig(ctx, s, "ecr", logger)
+func getSecretConfig(ctx context.Context, s logical.Storage, clientType string, req *logical.Response, logger hclog.Logger) (*aws.Config, error) {
+	credsConfig := &awsutil.CredentialsConfig{}
+	var maxRetries int = aws.UseServiceDefaultRetries
+
+	entry, err := s.Get(ctx, "config/root")
+	if err != nil {
+		return nil, err
+	}
+	if entry != nil {
+		var config rootConfig
+		if err := entry.DecodeJSON(&config); err != nil {
+			return nil, fmt.Errorf("error reading root configuration: %w", err)
+		}
+
+		credsConfig.AccessKey = config.AccessKey
+		credsConfig.SecretKey = config.SecretKey
+		credsConfig.Region = config.Region
+		maxRetries = config.MaxRetries
+	}
+
+	if credsConfig.Region == "" {
+		credsConfig.Region = os.Getenv("AWS_REGION")
+		if credsConfig.Region == "" {
+			credsConfig.Region = os.Getenv("AWS_DEFAULT_REGION")
+			if credsConfig.Region == "" {
+				credsConfig.Region = "us-east-1"
+			}
+		}
+	}
+
+	accessKeyRaw, ok := req.Secret.InternalData["access_key"]
+	if !ok {
+		return nil, fmt.Errorf("secret is missing accessKey internal data")
+	}
+	accessKey, ok := accessKeyRaw.(string)
+	if !ok {
+		return nil, fmt.Errorf("secret is missing accessKey internal data")
+	}
+	secretKeyRaw, ok := req.Secret.InternalData["secret_key"]
+	if !ok {
+		return nil, fmt.Errorf("secret is missing secretKey internal data")
+	}
+	secretKey, ok := secretKeyRaw.(string)
+	if !ok {
+		return nil, fmt.Errorf("secret is missing secretKey internal data")
+	}
+
+	credsConfig.AccessKey = accessKey
+	credsConfig.SecretKey = secretKey
+
+	credsConfig.HTTPClient = cleanhttp.DefaultClient()
+
+	credsConfig.Logger = logger
+
+	creds, err := credsConfig.GenerateCredentialChain()
+	if err != nil {
+		return nil, err
+	}
+
+	return &aws.Config{
+		Credentials: creds,
+		Region:      aws.String(credsConfig.Region),
+		HTTPClient:  cleanhttp.DefaultClient(),
+		MaxRetries:  aws.Int(maxRetries),
+	}, nil
+}
+
+func nonCachedClientECR(ctx context.Context, s logical.Storage, req *logical.Response, logger hclog.Logger) (*ecr.ECR, error) {
+	awsConfig, err := getSecretConfig(ctx, s, "ecr", req, logger)
 	if err != nil {
 		return nil, err
 	}

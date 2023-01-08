@@ -46,18 +46,12 @@ func (b *backend) pathCredsRead(ctx context.Context, req *logical.Request, d *fr
 			"Role %q not found", roleName)), nil
 	}
 
-	var credentialType string
-	switch {
-	case len(role.CredentialTypes) == 1:
-		credentialType = role.CredentialTypes[0]
+	resp, err := b.secretAccessKeysCreate(ctx, req.Storage, req.DisplayName, roleName, role)
+	if err != nil {
+		return nil, fmt.Errorf("error creating iam user: %w", err)
 	}
 
-	switch credentialType {
-	case authorizationTokenCred:
-		return b.getAuthorizationToken(ctx, req.Storage)
-	default:
-		return logical.ErrorResponse(fmt.Sprintf("unknown credential_type: %q", credentialType)), nil
-	}
+	return b.getAuthorizationToken(ctx, req.Storage, resp)
 }
 
 func (b *backend) pathUserRollback(ctx context.Context, req *logical.Request, _kind string, data interface{}) error {
