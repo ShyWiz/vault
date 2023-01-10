@@ -129,7 +129,7 @@ func (b *backend) clientIAM(ctx context.Context, s logical.Storage) (iamiface.IA
 	return b.iamClient, nil
 }
 
-func (b *backend) clientECR(ctx context.Context, s logical.Storage, req *logical.Response) (ecriface.ECRAPI, error) {
+func (b *backend) clientECR(ctx context.Context, s logical.Storage, auth *logical.Response) (ecriface.ECRAPI, error) {
 	b.clientMutex.RLock()
 	if b.ecrClient != nil {
 		b.clientMutex.RUnlock()
@@ -147,7 +147,7 @@ func (b *backend) clientECR(ctx context.Context, s logical.Storage, req *logical
 		return b.ecrClient, nil
 	}
 
-	ecrClient, err := nonCachedClientECR(ctx, s, req, b.Logger())
+	ecrClient, err := nonCachedClientECR(ctx, s, auth, b.Logger())
 	if err != nil {
 		return nil, err
 	}

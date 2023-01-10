@@ -6,6 +6,8 @@ import (
 	"regexp"
 	"time"
 
+	"github.com/aws/aws-sdk-go/aws/awserr"
+	"github.com/hashicorp/go-hclog"
 	"github.com/hashicorp/go-secure-stdlib/awsutil"
 	"github.com/hashicorp/vault/sdk/framework"
 	"github.com/hashicorp/vault/sdk/helper/template"
@@ -13,6 +15,7 @@ import (
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/ecr"
+	"github.com/aws/aws-sdk-go/service/ecr/ecriface"
 	"github.com/aws/aws-sdk-go/service/iam"
 	"github.com/hashicorp/errwrap"
 )
@@ -32,14 +35,9 @@ func secretAccessKeys(b *backend) *framework.Secret {
 				Type:        framework.TypeString,
 				Description: "Access Key",
 			},
-
 			"secret_key": {
 				Type:        framework.TypeString,
 				Description: "Secret Key",
-			},
-			"security_token": {
-				Type:        framework.TypeString,
-				Description: "Security Token",
 			},
 		},
 
@@ -71,15 +69,29 @@ func genUsername(displayName, policyName, usernameTemplate string) (ret string, 
 	return
 }
 
-func (b *backend) getAuthorizationToken(ctx context.Context, s logical.Storage, req *logical.Response) (*logical.Response, error) {
-	ecrClient, err := b.clientECR(ctx, s, req)
-	if err != nil {
-		return logical.ErrorResponse(err.Error()), nil
-	}
-
+func getAuthorizationTokenHelper(ecrClient ecriface.ECRAPI, maxRetries int, startCount int, logger hclog.Logger) (*ecr.GetAuthorizationTokenOutput, error) {
 	getTokenInput := &ecr.GetAuthorizationTokenInput{}
-
 	tokenResp, err := ecrClient.GetAuthorizationToken(getTokenInput)
+	if err != nil {
+		if aerr, ok := err.(awserr.Error); ok {
+			if aerr.Code() == "UnrecognizedClientException" &&
+				aerr.Message() == "The security token included in the request is invalid." &&
+				startCount < maxRetries {
+				startCount++
+				logger.Info(fmt.Sprintf("Failed to retrieve ECR token, tried (%d) of (%d).", startCount, maxRetries))
+				return getAuthorizationTokenHelper(ecrClient, maxRetries, startCount, logger)
+			}
+		}
+		return nil, err
+	}
+	return tokenResp, nil
+}
+
+func (b *backend) getAuthorizationToken(ctx context.Context, s logical.Storage, auth *logical.Response) (*logical.Response, error) {
+	ecrClient, err := b.clientECR(ctx, s, auth)
+
+	var maxRetries int = 5
+	tokenResp, err := getAuthorizationTokenHelper(ecrClient, maxRetries, 0, b.Logger())
 	if err != nil {
 		return logical.ErrorResponse("Error generating ECR token: %s", err), awsutil.CheckAWSError(err)
 	}
@@ -148,7 +160,7 @@ func (b *backend) secretAccessKeysCreate(
 		return nil, fmt.Errorf("error writing WAL entry: %w", err)
 	}
 
-	userPath := username
+	userPath := fmt.Sprintf("/%s/", username)
 
 	createUserRequest := &iam.CreateUserInput{
 		UserName: aws.String(username),

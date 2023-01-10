@@ -38,6 +38,11 @@ func pathRoles(b *backend) *framework.Path {
 					Name: "Policy Name",
 				},
 			},
+			"registry_permission": {
+				Type:        framework.TypeString,
+				Description: "Type of permission to apply. Must be one of 'read', 'write'.",
+				Required:    true,
+			},
 		},
 
 		Callbacks: map[logical.Operation]framework.OperationFunc{
@@ -103,6 +108,10 @@ func (b *backend) pathRolesWrite(ctx context.Context, req *logical.Request, d *f
 	}
 	if roleEntry == nil {
 		roleEntry = &awsRoleEntry{}
+	}
+
+	if RegistryPermissionRaw, ok := d.GetOk("registry_permission"); ok {
+		roleEntry.RegistryPermission = RegistryPermissionRaw.(string)
 	}
 
 	err = roleEntry.validate()
@@ -199,10 +208,8 @@ func (r *awsRoleEntry) toResponseData() map[string]interface{} {
 func (r *awsRoleEntry) validate() error {
 	var errors *multierror.Error
 
-	if r.RegistryPermission != "" {
-		if r.RegistryPermission != "read" || r.RegistryPermission != "write" {
-			errors = multierror.Append(errors, fmt.Errorf("unrecognized registry permission: %s", r.RegistryPermission))
-		}
+	if r.RegistryPermission != "read" && r.RegistryPermission != "write" {
+		errors = multierror.Append(errors, fmt.Errorf("unrecognized registry permission: '%s'. Must be one of 'read' or 'write'", r.RegistryPermission))
 	}
 
 	return errors.ErrorOrNil()
