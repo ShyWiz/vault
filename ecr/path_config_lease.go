@@ -9,6 +9,8 @@ import (
 	"github.com/hashicorp/vault/sdk/logical"
 )
 
+const ecrAuthMaxLease = "12h"
+
 func pathConfigLease(b *backend) *framework.Path {
 	return &framework.Path{
 		Pattern: "config/lease",
@@ -35,18 +37,37 @@ func pathConfigLease(b *backend) *framework.Path {
 }
 
 // Lease returns the lease information
-func (b *backend) Lease(ctx context.Context, s logical.Storage) (*configLease, error) {
-	entry, err := s.Get(ctx, "config/lease")
+func (b *backend) Lease(ctx context.Context, s logical.Storage, lifeTimeInSeconds int64) (*configLease, error) {
+	leaseMax, err := time.ParseDuration(ecrAuthMaxLease)
 	if err != nil {
-		return nil, err
-	}
-	if entry == nil {
-		return nil, nil
+		return nil, fmt.Errorf(fmt.Sprintf(
+			"Invalid lease_max: %s (check code definition of: 'const ecrAuthMaxLease')", err))
 	}
 
-	var result configLease
-	if err := entry.DecodeJSON(&result); err != nil {
-		return nil, err
+	var maxTTL int64 = int64(leaseMax.Seconds())
+
+	if lifeTimeInSeconds > maxTTL {
+		lifeTimeInSeconds = maxTTL
+	}
+
+	result := configLease{
+		Lease:    time.Duration(lifeTimeInSeconds) * time.Second,
+		LeaseMax: leaseMax,
+	}
+
+	if lifeTimeInSeconds <= 0 {
+		entry, err := s.Get(ctx, "config/lease")
+		if err != nil {
+			return nil, err
+		}
+		if entry == nil {
+			return nil, fmt.Errorf("lease config is missing data (check config/lease)")
+			// return nil, nil
+		}
+
+		if err := entry.DecodeJSON(&result); err != nil {
+			return nil, err
+		}
 	}
 
 	return &result, nil
@@ -90,7 +111,7 @@ func (b *backend) pathLeaseWrite(ctx context.Context, req *logical.Request, d *f
 }
 
 func (b *backend) pathLeaseRead(ctx context.Context, req *logical.Request, data *framework.FieldData) (*logical.Response, error) {
-	lease, err := b.Lease(ctx, req.Storage)
+	lease, err := b.Lease(ctx, req.Storage, 0)
 	if err != nil {
 		return nil, err
 	}

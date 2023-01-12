@@ -2,6 +2,8 @@ module github.com/ShyWiz/vault/ecr
 
 go 1.19
 
+replace github.com/ShyWiz/vault/ecr => ./
+
 require (
 	github.com/hashicorp/go-hclog v1.4.0
 	github.com/hashicorp/vault/api v1.8.2

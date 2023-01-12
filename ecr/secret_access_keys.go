@@ -4,8 +4,10 @@ import (
 	"context"
 	"fmt"
 	"regexp"
-	"time"
+	// "time"
 
+	"github.com/aws/aws-sdk-go/aws/awserr"
+	"github.com/hashicorp/go-hclog"
 	"github.com/hashicorp/go-secure-stdlib/awsutil"
 	"github.com/hashicorp/vault/sdk/framework"
 	"github.com/hashicorp/vault/sdk/helper/template"
@@ -13,6 +15,7 @@ import (
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/ecr"
+	"github.com/aws/aws-sdk-go/service/ecr/ecriface"
 	"github.com/aws/aws-sdk-go/service/iam"
 	"github.com/hashicorp/errwrap"
 )
@@ -32,14 +35,9 @@ func secretAccessKeys(b *backend) *framework.Secret {
 				Type:        framework.TypeString,
 				Description: "Access Key",
 			},
-
 			"secret_key": {
 				Type:        framework.TypeString,
 				Description: "Secret Key",
-			},
-			"security_token": {
-				Type:        framework.TypeString,
-				Description: "Security Token",
 			},
 		},
 
@@ -71,25 +69,39 @@ func genUsername(displayName, policyName, usernameTemplate string) (ret string, 
 	return
 }
 
-func (b *backend) getAuthorizationToken(ctx context.Context, s logical.Storage, req *logical.Response) (*logical.Response, error) {
-	ecrClient, err := b.clientECR(ctx, s, req)
-	if err != nil {
-		return logical.ErrorResponse(err.Error()), nil
-	}
-
+func getAuthorizationTokenHelper(ecrClient ecriface.ECRAPI, maxRetries int, startCount int, logger hclog.Logger) (*ecr.GetAuthorizationTokenOutput, error) {
 	getTokenInput := &ecr.GetAuthorizationTokenInput{}
-
 	tokenResp, err := ecrClient.GetAuthorizationToken(getTokenInput)
 	if err != nil {
-		return logical.ErrorResponse("Error generating ECR token: %s", err), awsutil.CheckAWSError(err)
+		if aerr, ok := err.(awserr.Error); ok {
+			if aerr.Code() == "UnrecognizedClientException" &&
+				aerr.Message() == "The security token included in the request is invalid." &&
+				startCount < maxRetries {
+				startCount++
+				logger.Info(fmt.Sprintf("Failed to retrieve ECR token, tried (%d) of (%d).", startCount, maxRetries))
+				return getAuthorizationTokenHelper(ecrClient, maxRetries, startCount, logger)
+			}
+		}
+		return nil, err
+	}
+	return tokenResp, nil
+}
+
+func (b *backend) getAuthorizationToken(ctx context.Context, s logical.Storage, auth *logical.Response) (*logical.Response, error) {
+	ecrClient, err := b.clientECR(ctx, s, auth)
+
+	var maxRetries int = 30
+	tokenResp, err := getAuthorizationTokenHelper(ecrClient, maxRetries, 0, b.Logger())
+	if err != nil {
+		return nil, fmt.Errorf("Error generating ECR token: %s\nCheckAWSError: %s", err, awsutil.CheckAWSError(err))
 	}
 
 	return &logical.Response{
 		Data: map[string]interface{}{
 			"auth_token":   *tokenResp.AuthorizationData[0].AuthorizationToken,
 			"registry_url": *tokenResp.AuthorizationData[0].ProxyEndpoint,
-			"ttl":          uint64(tokenResp.AuthorizationData[0].ExpiresAt.Sub(time.Now()).Seconds()),
 		},
+		Secret: auth.Secret,
 	}, nil
 }
 
@@ -113,7 +125,7 @@ func (b *backend) secretAccessKeysCreate(
 	ctx context.Context,
 	s logical.Storage,
 	displayName, policyName string,
-	role *awsRoleEntry,
+	role *awsRoleEntry, lifeTimeInSeconds int64,
 ) (*logical.Response, error) {
 	iamClient, err := b.clientIAM(ctx, s)
 	if err != nil {
@@ -148,7 +160,7 @@ func (b *backend) secretAccessKeysCreate(
 		return nil, fmt.Errorf("error writing WAL entry: %w", err)
 	}
 
-	userPath := username
+	userPath := fmt.Sprintf("/%s/", username)
 
 	createUserRequest := &iam.CreateUserInput{
 		UserName: aws.String(username),
@@ -165,6 +177,10 @@ func (b *backend) secretAccessKeysCreate(
 		return logical.ErrorResponse("Error creating IAM user: %s", err), awsutil.CheckAWSError(err)
 	}
 
+	resp := b.Secret(secretAccessKeyType).Response(map[string]interface{}{}, map[string]interface{}{
+		"username": username,
+	})
+
 	arn := ""
 	switch role.RegistryPermission {
 	case "read":
@@ -178,8 +194,10 @@ func (b *backend) secretAccessKeysCreate(
 		PolicyArn: aws.String(arn),
 	})
 	if err != nil {
-		return logical.ErrorResponse("Error attaching user policy: %s", err), awsutil.CheckAWSError(err)
+		return resp, fmt.Errorf("Error attaching user policy: %s. %s", err, awsutil.CheckAWSError(err))
 	}
+
+	resp.Secret.InternalData["policy"] = role
 
 	// TODO
 	// var tags []*iam.Tag
@@ -207,27 +225,25 @@ func (b *backend) secretAccessKeysCreate(
 		UserName: aws.String(username),
 	})
 	if err != nil {
-		return logical.ErrorResponse("Error creating access keys: %s", err), awsutil.CheckAWSError(err)
+		return resp, fmt.Errorf("Error creating access keys: %s. %s", err, awsutil.CheckAWSError(err))
 	}
+
+	resp.Secret.InternalData["access_key"] = *keyResp.AccessKey.AccessKeyId
+	resp.Secret.InternalData["secret_key"] = *keyResp.AccessKey.SecretAccessKey
 
 	// Remove the WAL entry, we succeeded! If we fail, we don't return
 	// the secret because it'll get rolled back anyways, so we have to return
 	// an error here.
 	if err := framework.DeleteWAL(ctx, s, walID); err != nil {
-		return nil, fmt.Errorf("failed to commit WAL entry: %w", err)
+		return resp, fmt.Errorf("failed to commit WAL entry: %w", err)
 	}
 
-	// Return the info!
-	resp := b.Secret(secretAccessKeyType).Response(map[string]interface{}{}, map[string]interface{}{
-		"access_key": *keyResp.AccessKey.AccessKeyId,
-		"secret_key": *keyResp.AccessKey.SecretAccessKey,
-		"username":   username,
-		"policy":     role,
-	})
-
-	lease, err := b.Lease(ctx, s)
-	if err != nil || lease == nil {
-		lease = &configLease{}
+	lease, err := b.Lease(ctx, s, lifeTimeInSeconds)
+	// if err != nil || lease == nil {
+	// 	lease = &configLease{}
+	// }
+	if err != nil {
+		return resp, err
 	}
 
 	resp.Secret.TTL = lease.Lease

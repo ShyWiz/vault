@@ -97,6 +97,7 @@ func (b *backend) pathConfigRootWrite(ctx context.Context, req *logical.Request,
 
 	// clear possible cached clients after successfully updating
 	// config/root
+	b.iamClient = nil
 	b.ecrClient = nil
 
 	return nil, nil

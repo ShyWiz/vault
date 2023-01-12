@@ -8,6 +8,7 @@ import (
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/awserr"
 	"github.com/aws/aws-sdk-go/service/iam"
+	"github.com/hashicorp/go-multierror"
 	"github.com/hashicorp/vault/sdk/framework"
 	"github.com/hashicorp/vault/sdk/logical"
 	"github.com/mitchellh/mapstructure"
@@ -20,6 +21,11 @@ func pathUser(b *backend) *framework.Path {
 			"name": {
 				Type:        framework.TypeString,
 				Description: "Name of the role",
+			},
+			"ttl": {
+				Type:        framework.TypeDurationSecond,
+				Description: "Lifetime of the returned credentials in seconds",
+				Default:     600,
 			},
 		},
 
@@ -46,12 +52,48 @@ func (b *backend) pathCredsRead(ctx context.Context, req *logical.Request, d *fr
 			"Role %q not found", roleName)), nil
 	}
 
-	resp, err := b.secretAccessKeysCreate(ctx, req.Storage, req.DisplayName, roleName, role)
-	if err != nil {
-		return nil, fmt.Errorf("error creating iam user: %w", err)
+	var ttl int64
+	ttlRaw, ok := d.GetOk("ttl")
+	switch {
+	case ok:
+		ttl = int64(ttlRaw.(int))
+	default:
+		ttl = int64(d.Get("ttl").(int))
 	}
 
-	return b.getAuthorizationToken(ctx, req.Storage, resp)
+	var errors *multierror.Error
+	iamAuth, err := b.secretAccessKeysCreate(ctx, req.Storage, req.DisplayName, roleName, role, ttl)
+	if err == nil {
+		ecrAuth, err := b.getAuthorizationToken(ctx, req.Storage, iamAuth)
+		if err == nil {
+			return ecrAuth, err
+		}
+		errors = multierror.Append(errors, fmt.Errorf("error getting ecr token: %w", err))
+	} else {
+		errors = multierror.Append(errors, fmt.Errorf("error creating iam user: %w", err))
+	}
+
+	if len(errors.Errors) > 0 && iamAuth != nil && iamAuth.Secret != nil {
+		// Get the username from the internal data
+		usernameRaw, ok := iamAuth.Secret.InternalData["username"]
+		if !ok {
+			return nil, multierror.Append(errors, fmt.Errorf("secret is missing username internal data"))
+		}
+		username, ok := usernameRaw.(string)
+		if !ok {
+			return nil, multierror.Append(errors, fmt.Errorf("secret is missing username internal data"))
+		}
+		b.Logger().Info(fmt.Sprintf("attempting to delete IAM user: %s", username))
+		req.Secret = iamAuth.Secret
+		_, err := b.secretAccessKeysRevoke(ctx, req, d)
+		if err != nil {
+			errors = multierror.Append(errors, fmt.Errorf("error deleting iam user: %w", err))
+		} else {
+			b.Logger().Info(fmt.Sprintf("successfully deleted IAM user: %s", username))
+		}
+	}
+
+	return nil, errors.ErrorOrNil()
 }
 
 func (b *backend) pathUserRollback(ctx context.Context, req *logical.Request, _kind string, data interface{}) error {

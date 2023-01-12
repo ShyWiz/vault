@@ -79,7 +79,7 @@ func nonCachedClientIAM(ctx context.Context, s logical.Storage, logger hclog.Log
 	return client, nil
 }
 
-func getSecretConfig(ctx context.Context, s logical.Storage, clientType string, req *logical.Response, logger hclog.Logger) (*aws.Config, error) {
+func getSecretConfig(ctx context.Context, s logical.Storage, clientType string, auth *logical.Response, logger hclog.Logger) (*aws.Config, error) {
 	credsConfig := &awsutil.CredentialsConfig{}
 	var maxRetries int = aws.UseServiceDefaultRetries
 
@@ -93,8 +93,6 @@ func getSecretConfig(ctx context.Context, s logical.Storage, clientType string, 
 			return nil, fmt.Errorf("error reading root configuration: %w", err)
 		}
 
-		credsConfig.AccessKey = config.AccessKey
-		credsConfig.SecretKey = config.SecretKey
 		credsConfig.Region = config.Region
 		maxRetries = config.MaxRetries
 	}
@@ -109,7 +107,7 @@ func getSecretConfig(ctx context.Context, s logical.Storage, clientType string, 
 		}
 	}
 
-	accessKeyRaw, ok := req.Secret.InternalData["access_key"]
+	accessKeyRaw, ok := auth.Secret.InternalData["access_key"]
 	if !ok {
 		return nil, fmt.Errorf("secret is missing accessKey internal data")
 	}
@@ -117,7 +115,7 @@ func getSecretConfig(ctx context.Context, s logical.Storage, clientType string, 
 	if !ok {
 		return nil, fmt.Errorf("secret is missing accessKey internal data")
 	}
-	secretKeyRaw, ok := req.Secret.InternalData["secret_key"]
+	secretKeyRaw, ok := auth.Secret.InternalData["secret_key"]
 	if !ok {
 		return nil, fmt.Errorf("secret is missing secretKey internal data")
 	}
@@ -128,12 +126,10 @@ func getSecretConfig(ctx context.Context, s logical.Storage, clientType string, 
 
 	credsConfig.AccessKey = accessKey
 	credsConfig.SecretKey = secretKey
-
 	credsConfig.HTTPClient = cleanhttp.DefaultClient()
-
 	credsConfig.Logger = logger
 
-	creds, err := credsConfig.GenerateCredentialChain()
+	creds, err := credsConfig.GenerateCredentialChain(awsutil.WithEnvironmentCredentials(false), awsutil.WithSharedCredentials(false))
 	if err != nil {
 		return nil, err
 	}
@@ -146,8 +142,8 @@ func getSecretConfig(ctx context.Context, s logical.Storage, clientType string, 
 	}, nil
 }
 
-func nonCachedClientECR(ctx context.Context, s logical.Storage, req *logical.Response, logger hclog.Logger) (*ecr.ECR, error) {
-	awsConfig, err := getSecretConfig(ctx, s, "ecr", req, logger)
+func nonCachedClientECR(ctx context.Context, s logical.Storage, auth *logical.Response, logger hclog.Logger) (*ecr.ECR, error) {
+	awsConfig, err := getSecretConfig(ctx, s, "ecr", auth, logger)
 	if err != nil {
 		return nil, err
 	}
